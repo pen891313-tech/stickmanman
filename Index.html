@@ -1,0 +1,200 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>졸라맨 러너 게임</title>
+    <style>
+        body {
+            margin: 0;
+            padding: 0;
+            background-color: #f0f0f0;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            height: 100vh;
+            font-family: sans-serif;
+            overflow: hidden;
+        }
+        canvas {
+            background-color: #ffffff;
+            box-shadow: 0px 4px 10px rgba(0,0,0,0.1);
+            border: 2px solid #333;
+        }
+        #info {
+            position: absolute;
+            top: 20px;
+            text-align: center;
+            font-size: 18px;
+            font-weight: bold;
+        }
+    </style>
+</head>
+<body>
+
+<div id="info">스페이스바(Space)를 눌러 점프하세요!</div>
+<canvas id="gameCanvas" width="800" height="400"></canvas>
+
+<script>
+const canvas = document.getElementById("gameCanvas");
+const ctx = canvas.getContext("2d");
+
+// 이미지 로드 (위에서 생성된 이미지를 'sprite.png'로 저장하거나 URL을 넣으세요)
+const spriteImg = new Image();
+spriteImg.src = 'sprite.png'; // 👈 여기에 실제 이미지 경로 또는 URL을 입력하세요.
+
+// 스프라이트 정보 설정 (256x256 전체 크기에서 8개 프레임이 4x2 또는 8x1 등으로 나뉜다고 가정)
+// 여기서는 이미지 속 가로 4칸, 세로 2칸(총 8프레임) 구조로 세팅했습니다.
+const frameWidth = 64;  // 한 프레임의 가로 크기 (256 / 4)
+const frameHeight = 128; // 한 프레임의 세로 크기 (256 / 2)
+const totalFrames = 8;
+const cols = 4;
+
+let gameFrame = 0;
+const staggerFrames = 6; // 애니메이션 속도 조절 (낮을수록 빨라짐)
+
+// 게임 오브젝트
+const player = {
+    x: 100,
+    y: 250,
+    width: frameWidth,
+    height: frameHeight,
+    vy: 0,
+    gravity: 0.6,
+    jumpForce: -12,
+    isGrounded: false
+};
+
+// 장애물
+const obstacles = [];
+let score = 0;
+let gameOver = false;
+
+// 키 입력 감지
+window.addEventListener("keydown", (e) => {
+    if (e.code === "Space" && player.isGrounded && !gameOver) {
+        player.vy = player.jumpForce;
+        player.isGrounded = false;
+    }
+    if (e.code === "Space" && gameOver) {
+        // 게임 리셋
+        gameOver = false;
+        obstacles.length = 0;
+        score = 0;
+        player.y = 250;
+        player.vy = 0;
+        animate();
+    }
+});
+
+function spawnObstacle() {
+    if (Math.random() < 0.02 && obstacles.length < 3) {
+        obstacles.push({
+            x: canvas.width,
+            y: 320,
+            width: 20,
+            height: 30,
+            speed: 5 + score * 0.1
+        });
+    }
+}
+
+function animate() {
+    if (gameOver) {
+        ctx.fillStyle = "rgba(0, 0, 0, 0.5)";
+        ctx.fillRect(0, 0, canvas.width, canvas.height);
+        ctx.fillStyle = "#fff";
+        ctx.font = "30px sans-serif";
+        ctx.fillText("Game Over", canvas.width / 2 - 80, canvas.height / 2);
+        ctx.font = "20px sans-serif";
+        ctx.fillText("다시 시작하려면 Space를 누르세요", canvas.width / 2 - 140, canvas.height / 2 + 40);
+        return;
+    }
+
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+    // 바닥 선 그리기
+    ctx.beginPath();
+    ctx.moveTo(0, 350);
+    ctx.lineTo(canvas.width, 350);
+    ctx.strokeStyle = "#333";
+    ctx.lineWidth = 2;
+    ctx.stroke();
+
+    // 플레이어 중력 적용
+    player.vy += player.gravity;
+    player.y += player.vy;
+
+    if (player.y >= 350 - player.height) {
+        player.y = 350 - player.height;
+        player.vy = 0;
+        player.isGrounded = true;
+    }
+
+    // 애니메이션 프레임 계산
+    // 점프 중일 때는 특정 프레임 고정, 달릴 때는 0~3번 프레임 순회하도록 설정 가능
+    let currentFrameIndex = Math.floor(gameFrame / staggerFrames) % totalFrames;
+    
+    // 점프 시에는 스프라이트 시트의 뒤쪽 프레임(예: 5번)을 쓰도록 예외 처리 가능
+    if (!player.isGrounded) {
+        currentFrameIndex = 5; 
+    }
+
+    const col = currentFrameIndex % cols;
+    const row = Math.floor(currentFrameIndex / cols);
+    
+    const sx = col * (spriteImg.width / cols);
+    const sy = row * (spriteImg.height / (totalFrames / cols));
+    const sWidth = spriteImg.width / cols;
+    const sHeight = spriteImg.height / (totalFrames / cols);
+
+    // 졸라맨 그리기
+    ctx.drawImage(
+        spriteImg,
+        sx, sy, sWidth, sHeight, // 원본 이미지 슬라이스 영역
+        player.x, player.y, player.width, player.height // 캔버스에 그려질 위치와 크기
+    );
+
+    // 장애물 업데이트 및 그리기
+    spawnObstacle();
+    for (let i = obstacles.length - 1; i >= 0; i--) {
+        let obs = obstacles[i];
+        obs.x -= obs.speed;
+
+        // 장애물 표현 (빨간 네모)
+        ctx.fillStyle = "#ff4d4d";
+        ctx.fillRect(obs.x, obs.y, obs.width, obs.height);
+
+        // 충돌 체크
+        if (
+            player.x < obs.x + obs.width &&
+            player.x + player.width - 20 > obs.x && // 히트박스 보정
+            player.y < obs.y + obs.height &&
+            player.y + player.height > obs.y
+        ) {
+            gameOver = true;
+        }
+
+        // 화면 밖으로 나간 장애물 제거 및 점수 획득
+        if (obs.x + obs.width < 0) {
+            obstacles.splice(i, 1);
+            score++;
+        }
+    }
+
+    // 점수 표시
+    ctx.fillStyle = "#333";
+    ctx.font = "20px sans-serif";
+    ctx.fillText(`Score: ${score}`, 20, 40);
+
+    gameFrame++;
+    requestAnimationFrame(animate);
+}
+
+// 이미지 로드 완료 후 게임 시작
+spriteImg.onload = function() {
+    animate();
+};
+</script>
+</body>
+</html>
