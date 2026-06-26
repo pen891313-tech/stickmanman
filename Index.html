@@ -3,198 +3,346 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>졸라맨 러너 게임</title>
+    <title>가벼운 졸라맨 격투 게임 (4x4 구조)</title>
     <style>
         body {
             margin: 0;
-            padding: 0;
-            background-color: #f0f0f0;
+            background-color: #111;
+            color: #fff;
+            font-family: 'Malgun Gothic', sans-serif;
             display: flex;
-            justify-content: center;
+            flex-direction: column;
             align-items: center;
-            height: 100vh;
-            font-family: sans-serif;
+            justify-content: center;
+            min-height: 100vh;
             overflow: hidden;
         }
-        canvas {
-            background-color: #ffffff;
-            box-shadow: 0px 4px 10px rgba(0,0,0,0.1);
-            border: 2px solid #333;
+        #game-container {
+            position: relative;
+            box-shadow: 0 0 20px rgba(255,255,255,0.1);
         }
-        #info {
-            position: absolute;
-            top: 20px;
-            text-align: center;
-            font-size: 18px;
-            font-weight: bold;
+        canvas {
+            background: #222;
+            display: block;
         }
     </style>
 </head>
 <body>
 
-<div id="info">스페이스바(Space)를 눌러 점프하세요!</div>
-<canvas id="gameCanvas" width="800" height="400"></canvas>
+<div id="game-container">
+    <canvas id="gameCanvas" width="960" height="540"></canvas>
+</div>
 
 <script>
-const canvas = document.getElementById("gameCanvas");
-const ctx = canvas.getContext("2d");
+const canvas = document.getElementById('gameCanvas');
+const ctx = canvas.getContext('2d');
 
-// 이미지 로드 (위에서 생성된 이미지를 'sprite.png'로 저장하거나 URL을 넣으세요)
-const spriteImg = new Image();
-spriteImg.src = 'sprite.png'; // 👈 여기에 실제 이미지 경로 또는 URL을 입력하세요.
+// --- 게임 상태 관리 ---
+const STATES = { PLAYING: 0, ROUND_END: 1, GAME_OVER: 2 };
+let gameState = STATES.PLAYING;
 
-// 스프라이트 정보 설정 (256x256 전체 크기에서 8개 프레임이 4x2 또는 8x1 등으로 나뉜다고 가정)
-// 여기서는 이미지 속 가로 4칸, 세로 2칸(총 8프레임) 구조로 세팅했습니다.
-const frameWidth = 64;  // 한 프레임의 가로 크기 (256 / 4)
-const frameHeight = 128; // 한 프레임의 세로 크기 (256 / 2)
-const totalFrames = 8;
-const cols = 4;
-
-let gameFrame = 0;
-const staggerFrames = 6; // 애니메이션 속도 조절 (낮을수록 빨라짐)
-
-// 게임 오브젝트
-const player = {
-    x: 100,
-    y: 250,
-    width: frameWidth,
-    height: frameHeight,
-    vy: 0,
-    gravity: 0.6,
-    jumpForce: -12,
-    isGrounded: false
+const images = {};
+const processedImages = {}; 
+const imgFiles = {
+    'p1_sheet': '1-1.png',
+    'p2_sheet': '1-2.png'
 };
 
-// 장애물
-const obstacles = [];
-let score = 0;
-let gameOver = false;
+// 핑크/보라색 바둑판무늬 배경 실시간 강제 제거 필터
+function removeSpriteBackground(imgKey, imgElement) {
+    const tempCanvas = document.createElement('canvas');
+    const tempCtx = tempCanvas.getContext('2d');
+    tempCanvas.width = imgElement.width;
+    tempCanvas.height = imgElement.height;
+    tempCtx.drawImage(imgElement, 0, 0);
+    
+    try {
+        const imgData = tempCtx.getImageData(0, 0, tempCanvas.width, tempCanvas.height);
+        const data = imgData.data;
+        
+        for (let i = 0; i < data.length; i += 4) {
+            let r = data[i];
+            let g = data[i+1];
+            let b = data[i+2];
+            
+            // AI 시트 특유의 핫핑크 및 연보라 격자무늬 색상 범위 지정 타겟팅 제거
+            const isMagentaOrPurple = (r > 120 && b > 140 && g < 110) || (r > 200 && b > 200 && g < 150);
+            if (isMagentaOrPurple) {
+                data[i + 3] = 0; // 해당 픽셀 투명화
+            }
+        }
+        tempCtx.putImageData(imgData, 0, 0);
+        const newImg = new Image();
+        newImg.src = tempCanvas.toDataURL();
+        processedImages[imgKey] = newImg;
+    } catch (e) {
+        console.error("배경 제거 에러 (로컬 보안 정책 원인):", e);
+        processedImages[imgKey] = imgElement; 
+    }
+}
 
-// 키 입력 감지
-window.addEventListener("keydown", (e) => {
-    if (e.code === "Space" && player.isGrounded && !gameOver) {
-        player.vy = player.jumpForce;
-        player.isGrounded = false;
-    }
-    if (e.code === "Space" && gameOver) {
-        // 게임 리셋
-        gameOver = false;
-        obstacles.length = 0;
-        score = 0;
-        player.y = 250;
-        player.vy = 0;
-        animate();
-    }
+Object.entries(imgFiles).forEach(([key, src]) => {
+    images[key] = new Image();
+    images[key].src = src;
+    images[key].onload = () => { removeSpriteBackground(key, images[key]); };
 });
 
-function spawnObstacle() {
-    if (Math.random() < 0.02 && obstacles.length < 3) {
-        obstacles.push({
-            x: canvas.width,
-            y: 320,
-            width: 20,
-            height: 30,
-            speed: 5 + score * 0.1
-        });
+// 정확한 4x4 매핑 데이터 (모든 동작은 가로 앞 4칸만 루프 재생)
+const animRows = { move: 0, jump: 1, attack: 2, skill: 3 };
+
+let p1Wins = 0, p2Wins = 0, currentRound = 1;
+const keys = {};
+
+window.addEventListener('keydown', e => { keys[e.key] = true; handleKeyDown(e.key); });
+window.addEventListener('keyup', e => { keys[e.key] = false; });
+
+class Player {
+    constructor(id, x, y, assetKey, isFlip) {
+        this.id = id;
+        this.x = x;
+        this.y = y;
+        this.baseY = y;
+        this.assetKey = assetKey;
+        this.width = 120;
+        this.height = 120;
+        this.speed = 5;
+        this.isFlip = isFlip; // 바라보는 방향 (기본 false=오른쪽, true=왼쪽)
+
+        // 능력치 및 게이지
+        this.maxHp = 100; this.hp = 100;
+        this.maxMp = 100; this.mp = 0;
+
+        // 점프 관련 물리
+        this.vy = 0;
+        this.isJumping = false;
+
+        // 애니메이션 상태 (4개 제어)
+        this.currentAction = 'move'; // move, jump, attack, skill
+        this.frameIdx = 0;
+        this.frameTimer = 0;
+        this.frameSpeed = 8; 
+        this.isLock = false; 
+    }
+
+    update() {
+        // 초당 기력 자연 충전
+        if (this.hp > 0 && this.mp < this.maxMp) this.mp = Math.min(this.maxMp, this.mp + 0.2);
+
+        // 중력 물리 작용 (점프 행)
+        if (this.isJumping) {
+            this.vy += 0.6; // 중력 가속도
+            this.y += this.vy;
+            if (this.y >= this.baseY) {
+                this.y = this.baseY;
+                this.vy = 0;
+                this.isJumping = false;
+                if (!this.isLock) this.currentAction = 'move';
+            }
+        }
+
+        // 애니메이션 프레임 관리 (4칸 제한 고정)
+        this.frameTimer++;
+        if (this.frameTimer >= this.frameSpeed) {
+            this.frameTimer = 0;
+            this.frameIdx++;
+            if (this.frameIdx >= 4) { // 4프레임 엄격 제한
+                if (this.isLock) {
+                    this.isLock = false;
+                    this.currentAction = this.isJumping ? 'jump' : 'move';
+                }
+                this.frameIdx = 0;
+            }
+        }
+    }
+
+    changeAction(action, isLock = false) {
+        if (this.currentAction === action) return;
+        if (this.isLock && !isLock) return;
+        this.currentAction = action;
+        this.frameIdx = 0;
+        this.frameTimer = 0;
+        this.isLock = isLock;
+    }
+
+    jump() {
+        if (this.isJumping) return;
+        this.isJumping = true;
+        this.vy = -13; // 도약 점프력
+        this.changeAction('jump');
+    }
+
+    draw() {
+        ctx.save();
+        let drawX = this.x;
+        
+        // 이동 단축키 입력 방향에 따라 좌우 X축 대칭 반전 렌더링
+        if (this.isFlip) {
+            ctx.scale(-1, 1);
+            drawX = -this.x - this.width;
+        }
+
+        const row = animRows[this.currentAction];
+        const processedImg = processedImages[this.assetKey];
+
+        if (processedImg) {
+            // 원본 격자 256x256 매핑 적용해 그리기
+            ctx.drawImage(
+                processedImg,
+                this.frameIdx * 256, row * 256, 256, 256,
+                drawX, this.y, this.width, this.height
+            );
+        } else {
+            // 이미지 미로드 시 대체 박스
+            ctx.fillStyle = this.id === 1 ? '#3498db' : '#e74c3c';
+            ctx.fillRect(drawX, this.y + 20, this.width, this.height - 20);
+        }
+        ctx.restore();
+
+        // 머리 위 정보 바 UI
+        ctx.fillStyle = 'rgba(0,0,0,0.5)';
+        ctx.fillRect(this.x, this.y - 20, this.width, 6);
+        ctx.fillRect(this.x, this.y - 10, this.width, 4);
+        ctx.fillStyle = '#2ecc71'; // HP
+        ctx.fillRect(this.x, this.y - 20, this.width * (this.hp / this.maxHp), 6);
+        ctx.fillStyle = '#3498db'; // MP
+        ctx.fillRect(this.x, this.y - 10, this.width * (this.mp / this.maxMp), 4);
     }
 }
 
-function animate() {
-    if (gameOver) {
-        ctx.fillStyle = "rgba(0, 0, 0, 0.5)";
-        ctx.fillRect(0, 0, canvas.width, canvas.height);
-        ctx.fillStyle = "#fff";
-        ctx.font = "30px sans-serif";
-        ctx.fillText("Game Over", canvas.width / 2 - 80, canvas.height / 2);
-        ctx.font = "20px sans-serif";
-        ctx.fillText("다시 시작하려면 Space를 누르세요", canvas.width / 2 - 140, canvas.height / 2 + 40);
-        return;
+let p1, p2;
+function initRound() {
+    p1 = new Player(1, 150, 320, 'p1_sheet', false);
+    p2 = new Player(2, 690, 320, 'p2_sheet', true);
+    gameState = STATES.PLAYING;
+}
+
+function handleKeyDown(key) {
+    if (gameState !== STATES.PLAYING) return;
+
+    // --- P1 단발 액션 ---
+    if (!p1.isLock && p1.hp > 0) {
+        if (key === 'w' || key === 'W') p1.jump();
+        if (key === 'f' || key === 'F') { p1.changeAction('attack', true); checkHit(p1, p2, 8); }
+        if (key === 'g' || key === 'G') {
+            if (p1.mp >= 30) { p1.mp -= 30; p1.changeAction('skill', true); checkHit(p1, p2, 18); }
+        }
     }
 
+    // --- P2 단발 액션 ---
+    if (!p2.isLock && p2.hp > 0) {
+        if (key === 'ArrowUp') p2.jump();
+        if (key === '1') { p2.changeAction('attack', true); checkHit(p2, p1, 8); }
+        if (key === '2') {
+            if (p2.mp >= 30) { p2.mp -= 30; p2.changeAction('skill', true); checkHit(p2, p1, 18); }
+        }
+    }
+}
+
+function checkHit(attacker, defender, damage) {
+    // 플레이어 겹침 및 통과 허용 처리 후 거리 계산 타격 판정
+    const dist = Math.abs((attacker.x + attacker.width/2) - (defender.x + defender.width/2));
+    if (dist < 140 && defender.hp > 0) {
+        defender.hp = Math.max(0, defender.hp - damage);
+    }
+}
+
+function updateMovement() {
+    if (gameState !== STATES.PLAYING) return;
+
+    // --- P1 실시간 좌우 이동 조작 ---
+    if (!p1.isLock && p1.hp > 0) {
+        let moving = false;
+        if (keys['a'] || keys['A']) {
+            p1.x -= p1.speed; p1.isFlip = true; moving = true;
+        } else if (keys['d'] || keys['D']) {
+            p1.x += p1.speed; p1.isFlip = false; moving = true;
+        }
+        if (moving && !p1.isJumping) p1.changeAction('move');
+        else if (!moving && !p1.isJumping) p1.changeAction('move'); // 졸라맨 특성상 기본 상태 유지
+    }
+
+    // --- P2 실시간 좌우 이동 조작 ---
+    if (!p2.isLock && p2.hp > 0) {
+        let moving = false;
+        if (keys['ArrowLeft']) {
+            p2.x -= p2.speed; p2.isFlip = true; moving = true;
+        } else if (keys['ArrowRight']) {
+            p2.x += p2.speed; p2.isFlip = false; moving = true;
+        }
+        if (moving && !p2.isJumping) p2.changeAction('move');
+    }
+
+    // 화면 영역 경계 제한 처리
+    [p1, p2].forEach(p => {
+        if (p.x < 0) p.x = 0;
+        if (p.x > canvas.width - p.width) p.x = canvas.width - p.width;
+    });
+}
+
+function gameLoop() {
     ctx.clearRect(0, 0, canvas.width, canvas.height);
 
-    // 바닥 선 그리기
-    ctx.beginPath();
-    ctx.moveTo(0, 350);
-    ctx.lineTo(canvas.width, 350);
-    ctx.strokeStyle = "#333";
-    ctx.lineWidth = 2;
-    ctx.stroke();
+    // 배경 지면선 그리기
+    ctx.strokeStyle = '#444'; ctx.lineWidth = 4;
+    ctx.beginPath(); ctx.moveTo(0, 440); ctx.lineTo(canvas.width, 440); ctx.stroke();
 
-    // 플레이어 중력 적용
-    player.vy += player.gravity;
-    player.y += player.vy;
+    // 동적 물리 및 렌더링 업데이트
+    updateMovement();
+    p1.update(); p2.update();
+    p1.draw(); p2.draw();
 
-    if (player.y >= 350 - player.height) {
-        player.y = 350 - player.height;
-        player.vy = 0;
-        player.isGrounded = true;
-    }
+    // 헤더 대전 상황 스코어 UI 
+    ctx.fillStyle = "rgba(0,0,0,0.4)"; ctx.fillRect(0, 0, canvas.width, 60);
+    ctx.fillStyle = "#fff"; ctx.font = "bold 20px Arial"; ctx.textAlign = "center";
+    ctx.fillText(`ROUND ${currentRound}`, canvas.width/2, 35);
+    ctx.textAlign = "left"; ctx.fillText(`P1 승리: ${p1Wins} / 2`, 40, 35);
+    ctx.textAlign = "right"; ctx.fillText(`P2 승리: ${p2Wins} / 2`, canvas.width - 40, 35);
 
-    // 애니메이션 프레임 계산
-    // 점프 중일 때는 특정 프레임 고정, 달릴 때는 0~3번 프레임 순회하도록 설정 가능
-    let currentFrameIndex = Math.floor(gameFrame / staggerFrames) % totalFrames;
-    
-    // 점프 시에는 스프라이트 시트의 뒤쪽 프레임(예: 5번)을 쓰도록 예외 처리 가능
-    if (!player.isGrounded) {
-        currentFrameIndex = 5; 
-    }
+    // 하단 조작 안내 키 가이드바 생성
+    ctx.fillStyle = "rgba(255,255,255,0.05)"; ctx.fillRect(0, canvas.height - 40, canvas.width, 40);
+    ctx.fillStyle = "#aaa"; ctx.font = "12px Arial"; ctx.textAlign = "center";
+    ctx.fillText("P1 조작: A, D (이동) | W (점프) | F (기본공격) | G (스킬스톰: 기력30)", canvas.width/4 + 30, canvas.height - 15);
+    ctx.fillText("P2 조작: ←, → (이동) | ↑ (점프) | 1 (기본공격) | 2 (스킬에너지: 기력30)", (canvas.width/4)*3 - 30, canvas.height - 15);
 
-    const col = currentFrameIndex % cols;
-    const row = Math.floor(currentFrameIndex / cols);
-    
-    const sx = col * (spriteImg.width / cols);
-    const sy = row * (spriteImg.height / (totalFrames / cols));
-    const sWidth = spriteImg.width / cols;
-    const sHeight = spriteImg.height / (totalFrames / cols);
+    // 승패 판정 시스템 (3판 2선승제 적용)
+    if (gameState === STATES.PLAYING) {
+        if (p1.hp <= 0 || p2.hp <= 0) {
+            gameState = STATES.ROUND_END;
+            setTimeout(() => {
+                if (p1.hp <= 0) p2Wins++;
+                else p1Wins++;
 
-    // 졸라맨 그리기
-    ctx.drawImage(
-        spriteImg,
-        sx, sy, sWidth, sHeight, // 원본 이미지 슬라이스 영역
-        player.x, player.y, player.width, player.height // 캔버스에 그려질 위치와 크기
-    );
-
-    // 장애물 업데이트 및 그리기
-    spawnObstacle();
-    for (let i = obstacles.length - 1; i >= 0; i--) {
-        let obs = obstacles[i];
-        obs.x -= obs.speed;
-
-        // 장애물 표현 (빨간 네모)
-        ctx.fillStyle = "#ff4d4d";
-        ctx.fillRect(obs.x, obs.y, obs.width, obs.height);
-
-        // 충돌 체크
-        if (
-            player.x < obs.x + obs.width &&
-            player.x + player.width - 20 > obs.x && // 히트박스 보정
-            player.y < obs.y + obs.height &&
-            player.y + player.height > obs.y
-        ) {
-            gameOver = true;
-        }
-
-        // 화면 밖으로 나간 장애물 제거 및 점수 획득
-        if (obs.x + obs.width < 0) {
-            obstacles.splice(i, 1);
-            score++;
+                if (p1Wins >= 2 || p2Wins >= 2) {
+                    gameState = STATES.GAME_OVER;
+                } else {
+                    currentRound++;
+                    initRound();
+                }
+            }, 1000);
         }
     }
 
-    // 점수 표시
-    ctx.fillStyle = "#333";
-    ctx.font = "20px sans-serif";
-    ctx.fillText(`Score: ${score}`, 20, 40);
+    if (gameState === STATES.ROUND_END) {
+        ctx.fillStyle = "rgba(0,0,0,0.6)"; ctx.fillRect(0,0,canvas.width,canvas.height);
+        ctx.fillStyle = "#fff"; ctx.font = "bold 35px Arial"; ctx.textAlign = "center";
+        ctx.fillText("ROUND OVER", canvas.width/2, canvas.height/2);
+    }
 
-    gameFrame++;
-    requestAnimationFrame(animate);
+    if (gameState === STATES.GAME_OVER) {
+        ctx.fillStyle = "rgba(0,0,0,0.85)"; ctx.fillRect(0,0,canvas.width,canvas.height);
+        ctx.fillStyle = "#f1c40f"; ctx.font = "bold 40px Arial"; ctx.textAlign = "center";
+        ctx.fillText(`최종 대전 승리: ${p1Wins >= 2 ? 'Player 1' : 'Player 2'}!`, canvas.width/2, canvas.height/2);
+        ctx.fillStyle = "#fff"; ctx.font = "16px Arial";
+        ctx.fillText("새로고침(F5)을 누르면 게임을 다시 시작합니다.", canvas.width/2, canvas.height/2 + 50);
+    }
+
+    requestAnimationFrame(gameLoop);
 }
 
-// 이미지 로드 완료 후 게임 시작
-spriteImg.onload = function() {
-    animate();
-};
+// 최초 가동 실행
+initRound();
+gameLoop();
 </script>
+
 </body>
 </html>
