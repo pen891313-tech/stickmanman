@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>졸라맨 격투 게임 - 투사체 및 흰색 배경 버전</title>
+    <title>졸라맨 격투 게임 - 256x256 완벽 규격 버전</title>
     <style>
         body {
             margin: 0;
@@ -22,7 +22,7 @@
             box-shadow: 0 0 20px rgba(0,0,0,0.15);
         }
         canvas {
-            background: #ffffff; /* 배경을 완전히 흰색으로 지정 */
+            background: #ffffff; /* 흰색 배경 */
             display: block;
         }
     </style>
@@ -40,16 +40,15 @@ const ctx = canvas.getContext('2d');
 const STATES = { PLAYING: 0, ROUND_END: 1, GAME_OVER: 2 };
 let gameState = STATES.PLAYING;
 
-// 이미지 객체 관리
 const originalImages = {};
-const processedImages = {}; // 1-2번의 보라색 배경 제거 전용 캔버스 데이터
+const processedImages = {}; 
 const imgFiles = {
     'p1': '1-1.png',
     'p2': '1-2.png'
 };
 
-// 1-2.png 특유의 핫핑크/보라색 바둑판 배경만 실시간 자동 투명화 필터
-function removeBackgroundForP2(imgElement) {
+// 보라색 배경 제거 크로마키 함수 (256x256 전용 최적화)
+function removeBackground(imgKey, imgElement) {
     const tempCanvas = document.createElement('canvas');
     const tempCtx = tempCanvas.getContext('2d');
     tempCanvas.width = imgElement.width;
@@ -62,8 +61,8 @@ function removeBackgroundForP2(imgElement) {
         
         for (let i = 0; i < data.length; i += 4) {
             let r = data[i]; let g = data[i+1]; let b = data[i+2];
-            // 핫핑크 및 연보라 격자무늬 타겟팅 픽셀 제거
-            const isMagentaOrPurple = (r > 110 && b > 130 && g < 110) || (r > 190 && b > 190 && g < 160);
+            // AI 시트 특유의 핫핑크/보라색 계열 픽셀 제거
+            const isMagentaOrPurple = (r > 100 && b > 120 && g < 110) || (r > 180 && b > 180 && g < 160);
             if (isMagentaOrPurple) {
                 data[i + 3] = 0; 
             }
@@ -71,9 +70,9 @@ function removeBackgroundForP2(imgElement) {
         tempCtx.putImageData(imgData, 0, 0);
         const newImg = new Image();
         newImg.src = tempCanvas.toDataURL();
-        processedImages['p2'] = newImg;
+        processedImages[imgKey] = newImg;
     } catch (e) {
-        processedImages['p2'] = imgElement; 
+        processedImages[imgKey] = imgElement; 
     }
 }
 
@@ -81,66 +80,64 @@ Object.entries(imgFiles).forEach(([key, src]) => {
     originalImages[key] = new Image();
     originalImages[key].src = src;
     originalImages[key].onload = () => {
-        if (key === 'p2') {
-            removeBackgroundForP2(originalImages[key]);
-        }
+        removeBackground(key, originalImages[key]);
     };
 });
 
-// 각각의 시트 구조 분석 정의 (1-1은 고퀄리티형, 1-2는 AI 졸라맨 격자형)
-const P1_W = 120, P1_H = 160;
-const P2_W = 256, P2_H = 256;
+// 요청하신 ★256x256★ 규격 칼같이 고정
+const TILE_SIZE = 256;
 
-const p1Rows = { 'idle': 0, 'walk': 1, 'run': 2, 'attack': 3, 'skill': 4, 'block': 7 };
-const p2Rows = { 'idle': 0, 'walk': 0, 'run': 0, 'attack': 2, 'skill': 3, 'block': 1 }; // 1-2 구조 매핑
+// 256x256 시트 행(Row) 정보 매핑
+// 0행: 이동(걷기), 1행: 점프/대기, 2행: 일반공격, 3행: 스킬
+const animRows = {
+    'idle': 0, 
+    'walk': 0,
+    'attack': 2,
+    'skill': 3,
+    'block': 1
+};
 
 let p1Wins = 0, p2Wins = 0, currentRound = 1;
 const keys = {};
-let projectiles = []; // 화면 끝까지 날아갈 장풍 객체 배열
+let projectiles = []; 
 
 window.addEventListener('keydown', e => { keys[e.key] = true; handleKeyDown(e.key); });
 window.addEventListener('keyup', e => { keys[e.key] = false; });
 
-// 장풍(투사체) 클래스
 class Projectile {
     constructor(ownerId, x, y, isFlip) {
         this.ownerId = ownerId;
         this.x = x;
-        this.y = y + 40;
+        this.y = y + 20;
         this.isFlip = isFlip;
         this.speed = isFlip ? -12 : 12;
-        this.width = ownerId === 1 ? 50 : 70;
-        this.height = ownerId === 1 ? 50 : 70;
+        this.width = 120;
+        this.height = 120;
         this.damage = 15;
         this.active = true;
     }
 
     update() {
         this.x += this.speed;
-        // 화면 좌우 한계선 끝까지 도달하면 자동 소멸 처리
-        if (this.x < -100 || this.x > canvas.width + 100) {
+        if (this.x < -150 || this.x > canvas.width + 150) {
             this.active = false;
         }
     }
 
     draw() {
         ctx.save();
-        if (this.ownerId === 1) {
-            // P1 장풍: 이펙트 구체 드로잉
-            ctx.fillStyle = '#3498db';
-            ctx.shadowColor = '#3498db';
-            ctx.shadowBlur = 15;
-            ctx.beginPath(); ctx.arc(this.x, this.y + 20, 20, 0, Math.PI*2); ctx.fill();
-        } else {
-            // P2 장풍: 1-2.png 시트 내부의 스킬 이펙트 서브셋을 가져와 이동 렌더링
-            const img = processedImages['p2'] || originalImages['p2'];
-            if (img && img.complete) {
-                if (this.isFlip) { ctx.scale(-1, 1); ctx.drawImage(img, 2 * 256, 3 * 256, 256, 256, -this.x - this.width, this.y - 30, 100, 100); }
-                else { ctx.drawImage(img, 2 * 256, 3 * 256, 256, 256, this.x, this.y - 30, 100, 100); }
+        const img = processedImages[`p${this.ownerId}`] || originalImages[`p${this.ownerId}`];
+        if (img && img.complete) {
+            if (this.isFlip) {
+                ctx.scale(-1, 1);
+                // 3번째 행(스킬행)의 2번째 칸(이펙트 구체)을 가져와 화면 끝까지 발사
+                ctx.drawImage(img, 2 * TILE_SIZE, 3 * TILE_SIZE, TILE_SIZE, TILE_SIZE, -this.x - this.width, this.y - 30, this.width, this.height);
             } else {
-                ctx.fillStyle = '#2ecc71';
-                ctx.fillRect(this.x, this.y, 40, 40);
+                ctx.drawImage(img, 2 * TILE_SIZE, 3 * TILE_SIZE, TILE_SIZE, TILE_SIZE, this.x, this.y - 30, this.width, this.height);
             }
+        } else {
+            ctx.fillStyle = this.ownerId === 1 ? '#3498db' : '#2ecc71';
+            ctx.beginPath(); ctx.arc(this.x + 30, this.y + 30, 20, 0, Math.PI*2); ctx.fill();
         }
         ctx.restore();
     }
@@ -151,15 +148,13 @@ class Player {
         this.id = id;
         this.x = x;
         this.y = y;
-        this.baseY = y;
         this.imgKey = imgKey;
         this.isFlip = isFlip;
 
-        // 화면 렌더링 스케일링 설정
-        this.width = id === 1 ? 120 : 150;
-        this.height = id === 1 ? 165 : 150;
-        this.speed = 4;
-        this.runSpeed = 7;
+        // 인게임 캐릭터 크기 설정
+        this.width = 160;
+        this.height = 160;
+        this.speed = 5;
 
         this.maxHp = 100; this.hp = 100;
         this.maxMp = 100; this.mp = 0;
@@ -167,7 +162,7 @@ class Player {
         this.currentAction = 'idle';
         this.frameIdx = 0;
         this.frameTimer = 0;
-        this.frameSpeed = 7;
+        this.frameSpeed = 6; // 애니메이션 속도
         this.isLock = false;
     }
 
@@ -179,9 +174,8 @@ class Player {
             this.frameTimer = 0;
             this.frameIdx++;
             
-            // 1-1은 8칸 구조 루프, 1-2는 앞의 4칸만 정밀 루프 제한
-            const maxFrames = this.id === 1 ? 8 : 4;
-            if (this.frameIdx >= maxFrames) {
+            // 4동작 4프레임 제한 구조 반영 (앞의 4칸만 무한 루프)
+            if (this.frameIdx >= 4) {
                 if (this.isLock) {
                     this.isLock = false;
                     this.currentAction = 'idle';
@@ -208,42 +202,37 @@ class Player {
             drawX = -this.x - this.width;
         }
 
-        if (this.id === 1) {
-            // Player 1 (고퀄리티 투명 시트)
-            const row = p1Rows[this.currentAction];
-            const img = originalImages['p1'];
-            if (img && img.complete) {
-                ctx.drawImage(img, this.frameIdx * P1_W, row * P1_H, P1_W, P1_H, drawX, this.y, this.width, this.height);
-            } else {
-                ctx.fillStyle = '#3498db'; ctx.fillRect(drawX, this.y, this.width, this.height);
-            }
+        const row = animRows[this.currentAction];
+        const img = processedImages[this.imgKey] || originalImages[this.imgKey];
+
+        if (img && img.complete) {
+            // 정확히 256x256 크기단위로 자르기 연산 수행
+            ctx.drawImage(
+                img,
+                this.frameIdx * TILE_SIZE, row * TILE_SIZE, TILE_SIZE, TILE_SIZE,
+                drawX, this.y, this.width, this.height
+            );
         } else {
-            // Player 2 (보라색 크로마키 가공 시트)
-            const row = p2Rows[this.currentAction];
-            const img = processedImages['p2'] || originalImages['p2'];
-            if (img && img.complete) {
-                ctx.drawImage(img, this.frameIdx * P2_W, row * P2_H, P2_W, P2_H, drawX, this.y, this.width, this.height);
-            } else {
-                ctx.fillStyle = '#2ecc71'; ctx.fillRect(drawX, this.y, this.width, this.height);
-            }
+            ctx.fillStyle = this.id === 1 ? '#3498db' : '#2ecc71';
+            ctx.fillRect(drawX, this.y, this.width, this.height);
         }
         ctx.restore();
 
-        // HP/MP UI (검은색 졸라맨 대비 가시성 향상 바)
+        // 체력바 / 기력바 UI
         ctx.fillStyle = '#ddd';
-        ctx.fillRect(this.x, this.y - 20, this.width, 6);
-        ctx.fillRect(this.x, this.y - 11, this.width, 4);
-        ctx.fillStyle = '#c0392b'; // HP 바 레드 스타일링
-        ctx.fillRect(this.x, this.y - 20, this.width * (this.hp / this.maxHp), 6);
-        ctx.fillStyle = '#2980b9'; // MP 바
-        ctx.fillRect(this.x, this.y - 11, this.width * (this.mp / this.maxMp), 4);
+        ctx.fillRect(this.x + 15, this.y - 15, this.width - 30, 6);
+        ctx.fillRect(this.x + 15, this.y - 6, this.width - 30, 4);
+        ctx.fillStyle = '#e74c3c'; 
+        ctx.fillRect(this.x + 15, this.y - 15, (this.width - 30) * (this.hp / this.maxHp), 6);
+        ctx.fillStyle = '#3498db'; 
+        ctx.fillRect(this.x + 15, this.y - 6, (this.width - 30) * (this.mp / this.maxMp), 4);
     }
 }
 
 let p1, p2;
 function initRound() {
-    p1 = new Player(1, 200, 330, 'p1', false);
-    p2 = new Player(2, 700, 345, 'p2', true); // 높이 축 비율 오차 보정 조정
+    p1 = new Player(1, 150, 315, 'p1', false);
+    p2 = new Player(2, 700, 315, 'p2', true);
     projectiles = [];
     gameState = STATES.PLAYING;
 }
@@ -251,26 +240,24 @@ function initRound() {
 function handleKeyDown(key) {
     if (gameState !== STATES.PLAYING) return;
 
-    // --- Player 1 단독 조작 ---
+    // --- P1 작동 트리거 ---
     if (!p1.isLock && p1.hp > 0) {
-        if (key === 'f' || key === 'F') { p1.changeAction('attack', true); checkMeleeHit(p1, p2, 6); }
+        if (key === 'f' || key === 'F') { p1.changeAction('attack', true); checkMeleeHit(p1, p2, 7); }
         if (key === 'g' || key === 'G') {
             if (p1.mp >= 30) { 
                 p1.mp -= 30; p1.changeAction('skill', true);
-                // 끝까지 날아가는 투사체 소환 생성
-                projectiles.push(new Projectile(1, p1.x + (p1.isFlip ? -20 : p1.width), p1.y + 30, p1.isFlip));
+                projectiles.push(new Projectile(1, p1.x + (p1.isFlip ? -30 : p1.width - 50), p1.y + 20, p1.isFlip));
             }
         }
     }
 
-    // --- Player 2 단독 조작 ---
+    // --- P2 작동 트리거 ---
     if (!p2.isLock && p2.hp > 0) {
         if (key === '1') { p2.changeAction('attack', true); checkMeleeHit(p2, p1, 7); }
         if (key === '2') {
             if (p2.mp >= 30) {
                 p2.mp -= 30; p2.changeAction('skill', true);
-                // 끝까지 날아가는 투사체 소환 생성
-                projectiles.push(new Projectile(2, p2.x + (p2.isFlip ? -40 : p2.width), p2.y + 20, p2.isFlip));
+                projectiles.push(new Projectile(2, p2.x + (p2.isFlip ? -30 : p2.width - 50), p2.y + 20, p2.isFlip));
             }
         }
     }
@@ -278,101 +265,89 @@ function handleKeyDown(key) {
 
 function checkMeleeHit(attacker, defender, damage) {
     const dist = Math.abs((attacker.x + attacker.width/2) - (defender.x + defender.width/2));
-    if (dist < 140 && defender.hp > 0) {
-        applyDamage(defender, damage);
-    }
-}
-
-function applyDamage(target, damage) {
-    if (target.currentAction === 'block') {
-        target.hp = Math.max(0, target.hp - (damage * 0.2)); // 가드 데미지 감소 상쇄
-    } else {
-        target.hp = Math.max(0, target.hp - damage);
+    if (dist < 130 && defender.hp > 0) {
+        if (defender.currentAction === 'block') {
+            defender.hp = Math.max(0, defender.hp - (damage * 0.2)); 
+        } else {
+            defender.hp = Math.max(0, defender.hp - damage);
+        }
     }
 }
 
 function updateMovement() {
     if (gameState !== STATES.PLAYING) return;
 
-    // P1 연속 이동
+    // P1 이동 루프
     if (!p1.isLock && p1.hp > 0) {
         let moving = false;
-        let speed = keys['Shift'] ? p1.runSpeed : p1.speed;
-        let act = keys['Shift'] ? 'run' : 'walk';
-
-        if (keys['a'] || keys['A']) { p1.x -= speed; p1.isFlip = true; moving = true; p1.changeAction(act); }
-        else if (keys['d'] || keys['D']) { p1.x += speed; p1.isFlip = false; moving = true; p1.changeAction(act); }
+        if (keys['a'] || keys['A']) { p1.x -= p1.speed; p1.isFlip = true; moving = true; p1.changeAction('walk'); }
+        else if (keys['d'] || keys['D']) { p1.x += p1.speed; p1.isFlip = false; moving = true; p1.changeAction('walk'); }
         if (keys['c'] || keys['C']) { p1.changeAction('block'); moving = true; }
         if (!moving) p1.changeAction('idle');
     }
 
-    // P2 연속 이동
+    // P2 이동 루프
     if (!p2.isLock && p2.hp > 0) {
         let moving = false;
-        let speed = keys['ArrowUp'] ? p2.runSpeed : p2.speed;
-        if (keys['ArrowLeft']) { p2.x -= speed; p2.isFlip = true; moving = true; p2.changeAction('walk'); }
-        else if (keys['ArrowRight']) { p2.x += speed; p2.isFlip = false; moving = true; p2.changeAction('walk'); }
+        if (keys['ArrowLeft']) { p2.x -= p2.speed; p2.isFlip = true; moving = true; p2.changeAction('walk'); }
+        else if (keys['ArrowRight']) { p2.x += p2.speed; p2.isFlip = false; moving = true; p2.changeAction('walk'); }
         if (keys['4']) { p2.changeAction('block'); moving = true; }
         if (!moving) p2.changeAction('idle');
     }
 
-    // 좌우 벽 이동 예외 제한
     [p1, p2].forEach(p => {
         if (p.x < 0) p.x = 0; if (p.x > canvas.width - p.width) p.x = canvas.width - p.width;
     });
 }
 
 function gameLoop() {
-    // 매 프레임 화면을 완전히 새하얗게 초기화 클리어
-    ctx.fillStyle = '#ffffff';
-    ctx.fillRect(0, 0, canvas.width, canvas.height);
+    ctx.fillStyle = '#ffffff'; ctx.fillRect(0, 0, canvas.width, canvas.height);
 
-    // 연한 회색의 바닥 라인 경계
-    ctx.strokeStyle = '#bdc3c7'; ctx.lineWidth = 5;
-    ctx.beginPath(); ctx.moveTo(0, 495); ctx.lineTo(canvas.width, 495); ctx.stroke();
+    // 지면선
+    ctx.strokeStyle = '#cccccc'; ctx.lineWidth = 4;
+    ctx.beginPath(); ctx.moveTo(0, 475); ctx.lineTo(canvas.width, 475); ctx.stroke();
 
-    // 캐릭터 및 실시간 이동 역학 업데이트
     updateMovement();
     p1.update(); p2.update();
 
-    // 독립된 스킬 장풍(투사체) 상태 실시간 업데이트 및 충돌 검사
+    // 장풍 업데이트 및 충돌 검사
     projectiles.forEach(proj => {
         if (!proj.active) return;
         proj.update();
         proj.draw();
 
-        // 장풍 피격 컬리전 연산 판정
         let target = proj.ownerId === 1 ? p2 : p1;
-        if (target.hp > 0 && proj.x > target.x && proj.x < target.x + target.width && proj.y > target.y && proj.y < target.y + target.height) {
-            applyDamage(target, proj.damage);
-            proj.active = false; // 타격 시 투사체 파괴
+        if (target.hp > 0 && proj.x > target.x && proj.x < target.x + target.width - 40 && proj.y > target.y && proj.y < target.y + target.height) {
+            if (target.currentAction === 'block') {
+                target.hp = Math.max(0, target.hp - (proj.damage * 0.2));
+            } else {
+                target.hp = Math.max(0, target.hp - proj.damage);
+            }
+            proj.active = false;
         }
     });
-    projectiles = projectiles.filter(p => p.active); // 소멸 장풍 가비지 컬렉팅 정리
+    projectiles = projectiles.filter(p => p.active);
 
     p1.draw(); p2.draw();
 
-    // 상단 깔끔한 회색 스코어 보드 UI 
-    ctx.fillStyle = "rgba(240,240,240,0.9)"; ctx.fillRect(0, 0, canvas.width, 60);
-    ctx.fillStyle = "#2c3e50"; ctx.font = "bold 20px Arial"; ctx.textAlign = "center";
+    // UI 레이아웃
+    ctx.fillStyle = "rgba(245,245,245,0.95)"; ctx.fillRect(0, 0, canvas.width, 60);
+    ctx.fillStyle = "#333333"; ctx.font = "bold 20px Arial"; ctx.textAlign = "center";
     ctx.fillText(`ROUND ${currentRound}`, canvas.width/2, 36);
-    ctx.textAlign = "left"; ctx.fillText(`P1 (교복) 승점: ${p1Wins}`, 50, 36);
-    ctx.textAlign = "right"; ctx.fillText(`P2 (졸라맨) 승점: ${p2Wins}`, canvas.width - 50, 36);
+    ctx.textAlign = "left"; ctx.fillText(`Player 1 승점: ${p1Wins}`, 50, 36);
+    ctx.textAlign = "right"; ctx.fillText(`Player 2 승점: ${p2Wins}`, canvas.width - 50, 36);
 
-    // 하단 키 인포 바 가이드라인
-    ctx.fillStyle = "rgba(230,230,230,0.9)"; ctx.fillRect(0, canvas.height - 45, canvas.width, 45);
-    ctx.fillStyle = "#34495e"; ctx.font = "12px Arial"; ctx.textAlign = "center";
-    ctx.fillText("P1: A/D(이동) | Shift(대시) | C(방어) | F(기본타격) | G(에너지파: 게이지30)", canvas.width/4 + 40, canvas.height - 18);
-    ctx.fillText("P2: ←/→(이동) | 4(방어) | 1(기본타격) | 2(이펙트풍: 게이지30)", (canvas.width/4)*3 - 40, canvas.height - 18);
+    ctx.fillStyle = "rgba(235,235,235,0.95)"; ctx.fillRect(0, canvas.height - 45, canvas.width, 45);
+    ctx.fillStyle = "#555555"; ctx.font = "12px Arial"; ctx.textAlign = "center";
+    ctx.fillText("P1 조작: A/D (이동) | C (방어) | F (기본기) | G (장풍 발사: 기력30)", canvas.width/4 + 40, canvas.height - 18);
+    ctx.fillText("P2 조작: ←/→ (이동) | 4 (방어) | 1 (기본기) | 2 (장풍 발사: 기력30)", (canvas.width/4)*3 - 40, canvas.height - 18);
 
-    // 매치 관리자 코어 룰셋
     if (gameState === STATES.PLAYING) {
         if (p1.hp <= 0 || p2.hp <= 0) {
             gameState = STATES.ROUND_END;
             setTimeout(() => {
                 if (p1.hp <= 0) p2Wins++;
                 else p1Wins++;
-
                 if (p1Wins >= 2 || p2Wins >= 2) gameState = STATES.GAME_OVER;
                 else { currentRound++; initRound(); }
             }, 1500);
@@ -380,17 +355,17 @@ function gameLoop() {
     }
 
     if (gameState === STATES.ROUND_END) {
-        ctx.fillStyle = "rgba(255,255,255,0.75)"; ctx.fillRect(0,0,canvas.width,canvas.height);
-        ctx.fillStyle = "#2c3e50"; ctx.font = "bold 40px Arial"; ctx.textAlign = "center";
+        ctx.fillStyle = "rgba(255,255,255,0.7)"; ctx.fillRect(0,0,canvas.width,canvas.height);
+        ctx.fillStyle = "#333"; ctx.font = "bold 40px Arial"; ctx.textAlign = "center";
         ctx.fillText("ROUND OVER", canvas.width/2, canvas.height/2);
     }
 
     if (gameState === STATES.GAME_OVER) {
         ctx.fillStyle = "rgba(255,255,255,0.95)"; ctx.fillRect(0,0,canvas.width,canvas.height);
-        ctx.fillStyle = "#c0392b"; ctx.font = "bold 45px Arial"; ctx.textAlign = "center";
-        ctx.fillText(`WINNER: ${p1Wins >= 2 ? 'PLAYER 1' : 'PLAYER 2'}`, canvas.width/2, canvas.height/2);
-        ctx.fillStyle = "#2c3e50"; ctx.font = "16px Arial";
-        ctx.fillText("새 게임을 시작하려면 새로고침(F5)을 누르세요.", canvas.width/2, canvas.height/2 + 60);
+        ctx.fillStyle = "#d35400"; ctx.font = "bold 45px Arial"; ctx.textAlign = "center";
+        ctx.fillText(`최종 승리자: PLAYER ${p1Wins >= 2 ? '1' : '2'}!`, canvas.width/2, canvas.height/2);
+        ctx.fillStyle = "#333"; ctx.font = "16px Arial";
+        ctx.fillText("F5를 누르면 처음부터 다시 시작합니다.", canvas.width/2, canvas.height/2 + 60);
     }
 
     requestAnimationFrame(gameLoop);
